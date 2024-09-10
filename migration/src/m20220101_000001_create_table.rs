@@ -7,7 +7,6 @@ pub struct Migration;
 enum Info {
     Table,
     Id,
-    UserId,
     ChatId,
     OmsCard,
     DateBirth,
@@ -22,9 +21,8 @@ impl MigrationTrait for Migration {
                     .table(Info::Table)
                     .if_not_exists()
                     .col(pk_auto(Info::Id))
-                    .col(integer(Info::UserId))
-                    .col(integer(Info::ChatId))
-                    .col(integer_null(Info::OmsCard))
+                    .col(big_integer(Info::ChatId))
+                    .col(big_integer_null(Info::OmsCard))
                     .col(date_null(Info::DateBirth))
                     .to_owned()
             )

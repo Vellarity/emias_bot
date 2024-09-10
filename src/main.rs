@@ -1,5 +1,5 @@
 use teloxide::{prelude::*, utils::command::BotCommands};
-use sea_orm::{self, ColumnTrait, ConnectOptions, Database, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, ConnectOptions, Database, DatabaseConnection, EntityTrait, QueryFilter};
 
 pub mod entities;
 use entities::{info, prelude::*};
@@ -35,7 +35,7 @@ enum EmCommand {
     #[command(description = "показать этот текст.")]
     Help,
     #[command(description = "инициализировать вашу запись в боте.")]
-    Init,    
+    Start,    
     #[command(description = "изменить номер ПОЛИСа.")]
     OmsCard(String),
     #[command(description = "изменить дату рождения (в формате DD.MM.YYYY).")]
@@ -45,17 +45,42 @@ enum EmCommand {
 async fn answer(bot: Bot, msg: Message, cmd: EmCommand) -> ResponseResult<()> {
     match cmd {
         EmCommand::Help => bot.send_message(msg.chat.id, EmCommand::descriptions().to_string()).await?,
-        EmCommand::Init => {
+        EmCommand::Start => {
             let q = Info::find().filter(info::Column::ChatId.eq(msg.chat.id.0)).one(DB.get().unwrap()).await.unwrap();
 
             match q {
                 Some(_) => bot.send_message(msg.chat.id, "Пользователь с вашими данными найден. Обновление базы не требуется.").await?,
-                None => bot.send_message(msg.chat.id, "Пользователь с вашими данными не найден. Инициализирована новая запись.").await?
+                None => {
+                    println!("user:{} \nchat:{}", &msg.chat.id.0, &msg.from.clone().unwrap().id.0);
+                    let res = Info::insert(info::ActiveModel{
+                        chat_id: ActiveValue::Set(msg.chat.id.0),
+                        ..Default::default()
+                    }).exec(DB.get().unwrap()).await;
+                    match res {
+                        Ok(_) => bot.send_message(msg.chat.id, "Пользователь с вашими данными не найден. Инициализирована новая запись. Используйте команду `/help` для получения справки.").await?,
+                        Err(_) => bot.send_message(msg.chat.id, "Не удалось инициализировать запись. Попробуйте позже или обратитесь к автору этого ужаса за помощью.").await?
+                    }
+                }
             }
         },
         EmCommand::OmsCard(oms) => {
-            bot.send_message(msg.chat.id, format!("Your oms is {oms}.")).await?
-        }
+            if oms.len() != 16 || oms.parse::<i64>().is_err() {
+                return bot.send_message(msg.chat.id, format!("Полис должен быть указан в формате 16 чисел без дополнительных символов и пробелов.")).await.map(|_| ());
+            }
+            let q = Info::find().filter(info::Column::ChatId.eq(msg.chat.id.0)).one(DB.get().unwrap()).await.unwrap();
+            match q {
+                Some(v) => {
+                    let mut nv: info::ActiveModel = v.into();
+                    nv.oms_card = ActiveValue::Set(Some(oms.parse::<i64>().unwrap()));
+                    let updated = nv.update(DB.get().unwrap()).await;
+                    match updated {
+                        Ok(_) => bot.send_message(msg.chat.id, format!("Ваш новый полис ОМС {oms}.")).await?,
+                        Err(_) => bot.send_message(msg.chat.id, format!("Не удалось обновить ваш полис. Попробуйте позже или обратитесь к автору этого безобразия.")).await?
+                    }
+                }
+                None => bot.send_message(msg.chat.id, format!("Не найдена запись с вашим id в системе бота. Попробуйте заново использовать команду `/start` или обратитесь к автору этого ужаса, если это не помогло.")).await?
+            }
+        },
         EmCommand::DateBirth(date) => {
             bot.send_message(msg.chat.id, format!("Your date of birth is {date}."))
                 .await?
