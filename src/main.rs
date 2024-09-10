@@ -1,3 +1,4 @@
+use chrono::NaiveDate;
 use teloxide::{prelude::*, utils::command::BotCommands};
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, ConnectOptions, Database, DatabaseConnection, EntityTrait, QueryFilter};
 
@@ -82,8 +83,23 @@ async fn answer(bot: Bot, msg: Message, cmd: EmCommand) -> ResponseResult<()> {
             }
         },
         EmCommand::DateBirth(date) => {
-            bot.send_message(msg.chat.id, format!("Your date of birth is {date}."))
-                .await?
+            let date_parsed = NaiveDate::parse_from_str(&date, "%d.%m.%Y");
+            if date_parsed.is_err() {
+                return bot.send_message(msg.chat.id, format!("Дата рождения должена быть указана в формате ДД.ММ.ГГГГ без дополнительных символов и пробелов.")).await.map(|_| ());
+            }
+            let q = Info::find().filter(info::Column::ChatId.eq(msg.chat.id.0)).one(DB.get().unwrap()).await.unwrap();
+            match q {
+                Some(v) => {
+                    let mut nv: info::ActiveModel = v.into();
+                    nv.date_birth = ActiveValue::Set(Some(date_parsed.unwrap()));
+                    let updated = nv.update(DB.get().unwrap()).await;
+                    match updated {
+                        Ok(_) => bot.send_message(msg.chat.id, format!("Вашa новая дата рождения {date}.")).await?,
+                        Err(_) => bot.send_message(msg.chat.id, format!("Не удалось обновить вашу дату рождения. Попробуйте позже или обратитесь к автору этого безобразия.")).await?
+                    }
+                }
+                None => bot.send_message(msg.chat.id, format!("Не найдена запись с вашим id в системе бота. Попробуйте заново использовать команду `/start` или обратитесь к автору этого ужаса, если это не помогло.")).await?
+            }
         }
     };
 
