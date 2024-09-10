@@ -41,6 +41,8 @@ enum EmCommand {
     OmsCard(String),
     #[command(description = "изменить дату рождения (в формате DD.MM.YYYY).")]
     DateBirth(String),
+    #[command(description = "показать актуальную инфомрацию обо мне в системе.")]
+    Info
 }
 
 async fn answer(bot: Bot, msg: Message, cmd: EmCommand) -> ResponseResult<()> {
@@ -98,6 +100,22 @@ async fn answer(bot: Bot, msg: Message, cmd: EmCommand) -> ResponseResult<()> {
                         Err(_) => bot.send_message(msg.chat.id, format!("Не удалось обновить вашу дату рождения. Попробуйте позже или обратитесь к автору этого безобразия.")).await?
                     }
                 }
+                None => bot.send_message(msg.chat.id, format!("Не найдена запись с вашим id в системе бота. Попробуйте заново использовать команду `/start` или обратитесь к автору этого ужаса, если это не помогло.")).await?
+            }
+        },
+        EmCommand::Info => {
+            let q = Info::find().filter(info::Column::ChatId.eq(msg.chat.id.0)).one(DB.get().unwrap()).await.unwrap();
+            match q {
+                Some(v) => {
+                    bot.send_message(
+                        msg.chat.id, 
+                        format!(
+                            "Полис ОМС: {}; \nДата рождения: {}.", 
+                            v.oms_card.map_or("не указан".to_string(), |s| s.to_string()), 
+                            v.date_birth.map_or("не указан".to_string(), |d| d.format("%d.%m.%Y").to_string())
+                        )
+                    ).await?
+                },
                 None => bot.send_message(msg.chat.id, format!("Не найдена запись с вашим id в системе бота. Попробуйте заново использовать команду `/start` или обратитесь к автору этого ужаса, если это не помогло.")).await?
             }
         }
