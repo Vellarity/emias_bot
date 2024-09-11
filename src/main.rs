@@ -1,12 +1,12 @@
 use chrono::NaiveDate;
 use teloxide::{prelude::*, utils::command::BotCommands};
-use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, ConnectOptions, Database, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, ConnectOptions, Database, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect};
 
 pub mod entities;
 use entities::{info, prelude::*};
 
 use dotenv::dotenv;
-use std::env;
+use std::{env, sync::Arc};
 
 pub static DB:tokio::sync::OnceCell<DatabaseConnection> = tokio::sync::OnceCell::const_new();
 
@@ -25,9 +25,35 @@ async fn main() {
         Database::connect(opt).await.unwrap()
     }).await;
 
-    let bot = Bot::new(token);
+    let bot = Arc::new(Bot::new(token));
+    let loop_bot = bot.clone();
+    let main_bot = bot.clone();
 
-    EmCommand::repl(bot, answer).await;
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+
+        loop {
+            interval.tick().await;
+
+            let chat_ids = Info::find()
+                .select_only()
+                .columns([info::Column::Id,info::Column::ChatId])
+                .all(DB.get().unwrap())
+                .await
+                .map(|op| 
+                    op.iter()
+                    .map(|it| it.chat_id).collect::<Vec<i64>>()
+                ).expect("Не могу прочитать БАЗУ.");
+
+            println!("{:?}", &chat_ids);
+
+            for chat_id in chat_ids {
+                let _ = loop_bot.send_message(ChatId(chat_id), "Test").await;
+            }
+        }
+    });
+
+    EmCommand::repl(main_bot, answer).await;
 }
 
 #[derive(BotCommands, Clone)]
