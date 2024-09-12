@@ -1,9 +1,13 @@
 use chrono::NaiveDate;
+use serde::Serialize;
 use teloxide::{prelude::*, utils::command::BotCommands};
-use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, ConnectOptions, Database, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect};
+use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, ConnectOptions, Database, DatabaseConnection, EntityTrait, QueryFilter};
 
 pub mod entities;
 use entities::{info, prelude::*};
+
+pub mod parsable;
+use parsable::referrals::{BasicResponse, ReferralsInfoRequest, ReferralsInfoResponse};
 
 use dotenv::dotenv;
 use std::{env, sync::Arc};
@@ -30,25 +34,57 @@ async fn main() {
     let main_bot = bot.clone();
 
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(120));
 
         loop {
             interval.tick().await;
 
-            let chat_ids = Info::find()
-                .select_only()
-                .columns([info::Column::Id,info::Column::ChatId])
+            let users_to_send = Info::find()
+                .filter(info::Column::OmsCard.is_not_null())
+                .filter(info::Column::DateBirth.is_not_null())
                 .all(DB.get().unwrap())
-                .await
-                .map(|op| 
-                    op.iter()
-                    .map(|it| it.chat_id).collect::<Vec<i64>>()
-                ).expect("Не могу прочитать БАЗУ.");
+                .await.expect("Не могу прочитать БАЗУ.");
 
-            println!("{:?}", &chat_ids);
+            for user in users_to_send {
+                let ref_data = ReferralsInfoRequest::new(
+                    Some("123".to_owned()), 
+                    user.oms_card.unwrap().to_string(), 
+                    user.date_birth.unwrap().to_string()
+                );
 
-            for chat_id in chat_ids {
-                let _ = loop_bot.send_message(ChatId(chat_id), "Test").await;
+                let ref_res = reqwest::Client::new()
+                    .post("https://emias.info/api/emc/appointment-eip/v1/?getReferralsInfo")
+                    .json(&ref_data)
+                    .send()
+                    .await;
+
+                match ref_res {
+                    Ok(res) => {
+                        //let ref_data = res.json::<ReferralsInfoResponse>().await;
+                        let parsed_ref_res = res.json::<ReferralsInfoResponse>().await.unwrap();
+                        let mut message_string = "Ваши направления: \n".to_string();
+                        for result in parsed_ref_res.result {
+                            message_string.push_str(
+                                &format!(
+                                    "[{start} - {end}] {name}\n\n", 
+                                    start = NaiveDate::parse_from_str(&result.start_time, "%Y-%m-%d").unwrap().format("%d.%m.%Y").to_string(),
+                                    end = NaiveDate::parse_from_str(&result.end_time, "%Y-%m-%d").unwrap().format("%d.%m.%Y").to_string(),
+                                    name = if result.to_doctor.is_some() { result.to_doctor.unwrap().speciality_name  } else { result.to_ldp.unwrap().ldp_type_name },
+                                )
+                            )
+                        }
+                        let _ = loop_bot.send_message(
+                            ChatId(user.chat_id), 
+                            message_string
+                        ).await;
+                        
+                    },
+                    Err(err) => {
+                        let _ = loop_bot.send_message(ChatId(user.chat_id), format!("Не удалось получить список направлений по причине: `{}`", err.status().unwrap())).await;
+                    }
+                }
+
+                //let _ = loop_bot.send_message(ChatId(user.chat_id), "Test").await;
             }
         }
     });
