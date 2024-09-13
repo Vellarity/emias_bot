@@ -1,5 +1,4 @@
 use chrono::NaiveDate;
-use serde::Serialize;
 use teloxide::{prelude::*, utils::command::BotCommands};
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, ConnectOptions, Database, DatabaseConnection, EntityTrait, QueryFilter};
 
@@ -7,7 +6,7 @@ pub mod entities;
 use entities::{info, prelude::*};
 
 pub mod parsable;
-use parsable::referrals::{BasicResponse, ReferralsInfoRequest, ReferralsInfoResponse};
+use parsable::{basic::BasicRequest, doctors::{self, DoctorsInfoParamsRequest, DoctorsInfoParamsResponse}, referrals::{ReferralsInfoParamsRequest, ReferralsInfoResponse}};
 
 use dotenv::dotenv;
 use std::{env, sync::Arc};
@@ -46,7 +45,7 @@ async fn main() {
                 .await.expect("Не могу прочитать БАЗУ.");
 
             for user in users_to_send {
-                let ref_data = ReferralsInfoRequest::new(
+                let ref_data = BasicRequest::<ReferralsInfoParamsRequest>::new(
                     Some("123".to_owned()), 
                     user.oms_card.unwrap().to_string(), 
                     user.date_birth.unwrap().to_string()
@@ -64,6 +63,13 @@ async fn main() {
                         let parsed_ref_res = res.json::<ReferralsInfoResponse>().await.unwrap();
                         let mut message_string = "Ваши направления: \n".to_string();
                         for result in parsed_ref_res.result {
+                            let doc_data = BasicRequest::<DoctorsInfoParamsRequest>::new(
+                                Some("123".to_owned()),
+                                user.oms_card.unwrap().to_string(),
+                                user.date_birth.unwrap().to_string(),
+                                result.id
+                            );
+
                             message_string.push_str(
                                 &format!(
                                     "[{start} - {end}] {name}\n\n", 
@@ -71,7 +77,37 @@ async fn main() {
                                     end = NaiveDate::parse_from_str(&result.end_time, "%Y-%m-%d").unwrap().format("%d.%m.%Y").to_string(),
                                     name = if result.to_doctor.is_some() { result.to_doctor.unwrap().speciality_name  } else { result.to_ldp.unwrap().ldp_type_name },
                                 )
-                            )
+                            );
+
+                            let doc_res = reqwest::Client::new()
+                                .post("https://emias.info/api/emc/appointment-eip/v1/?getDoctorsInfo")
+                                .json(&doc_data)
+                                .send()
+                                .await;
+
+                            match doc_res {
+                                Ok(dr) => {
+                                    //println!("{:#?}", dr.text().await);
+                                    let parsed_doc_res = dr.json::<DoctorsInfoParamsResponse>().await.unwrap();
+                                    let mut doctors_string = String::new();
+
+                                    if let doctors::ResultType::LdpArray(result) = parsed_doc_res.result {
+                                        for ldp in result {
+                                            println!("--- {:#?}\n", ldp);
+                                        }
+                                    } else if let doctors::ResultType::DocArray(result) = parsed_doc_res.result {
+                                        for doctor in result {
+                                            
+                                        }
+                                    }
+                                },
+                                Err(err) => {
+                                    let _ = loop_bot.send_message(ChatId(user.chat_id), format!("Не удалось получить список направлений по причине: `{}`", err.status().unwrap())).await;
+                                }
+                            }
+
+
+
                         }
                         let _ = loop_bot.send_message(
                             ChatId(user.chat_id), 

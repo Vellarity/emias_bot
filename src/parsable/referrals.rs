@@ -1,14 +1,6 @@
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
 
-use serde::{Deserialize, Serialize, };
-
-#[derive(Debug, Serialize)]
-pub struct ReferralsInfoRequest<T> {
-    id: Option<String>,
-    jsonrpc: String,
-    method: String,
-    params: T
-}
+use super::basic::BasicRequest;
 
 #[allow(non_snake_case)]
 #[derive(Debug, Serialize)]
@@ -17,14 +9,14 @@ pub struct ReferralsInfoParamsRequest {
     birthDate: String
 }
 
-impl ReferralsInfoRequest<ReferralsInfoParamsRequest> {
+impl BasicRequest<ReferralsInfoParamsRequest> {
     pub fn new(
         id:Option<String>, 
         oms_number: String,
         birth_date:String
     ) -> Self {
         Self{
-            id: id,
+            id,
             jsonrpc: "2.0".to_string(),
             method: "getReferralsInfo".to_string(),
             params: ReferralsInfoParamsRequest {
@@ -33,13 +25,6 @@ impl ReferralsInfoRequest<ReferralsInfoParamsRequest> {
             }
         }
     }
-}
-
-#[allow(dead_code)]
-#[derive(Deserialize, Debug)]
-pub struct BasicResponse<T> {
-    headers: HashMap<String, String>,
-    data: T
 }
 
 #[allow(dead_code)]
