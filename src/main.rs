@@ -1,4 +1,5 @@
 use chrono::NaiveDate;
+use helper::collect_free_rooms_data;
 use teloxide::{prelude::*, utils::command::BotCommands};
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, ConnectOptions, Database, DatabaseConnection, EntityTrait, QueryFilter};
 
@@ -7,6 +8,8 @@ use entities::{info, prelude::*};
 
 pub mod parsable;
 use parsable::{basic::BasicRequest, doctors::{self, DoctorsInfoParamsRequest, DoctorsInfoParamsResponse}, referrals::{ReferralsInfoParamsRequest, ReferralsInfoResponse}};
+
+pub mod helper;
 
 use dotenv::dotenv;
 use std::{env, sync::Arc};
@@ -33,7 +36,7 @@ async fn main() {
     let main_bot = bot.clone();
 
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(120));
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60*30));
 
         loop {
             interval.tick().await;
@@ -72,7 +75,7 @@ async fn main() {
 
                             message_string.push_str(
                                 &format!(
-                                    "[{start} - {end}] {name}\n\n", 
+                                    "[{start} - {end}] {name}\n", 
                                     start = NaiveDate::parse_from_str(&result.start_time, "%Y-%m-%d").unwrap().format("%d.%m.%Y").to_string(),
                                     end = NaiveDate::parse_from_str(&result.end_time, "%Y-%m-%d").unwrap().format("%d.%m.%Y").to_string(),
                                     name = if result.to_doctor.is_some() { result.to_doctor.unwrap().speciality_name  } else { result.to_ldp.unwrap().ldp_type_name },
@@ -93,13 +96,19 @@ async fn main() {
 
                                     if let doctors::ResultType::LdpArray(result) = parsed_doc_res.result {
                                         for ldp in result {
-                                            println!("--- {:#?}\n", ldp);
+                                            doctors_string.push_str(&format!("- {}: \n", ldp.name));
+                                            let free_rooms = collect_free_rooms_data(ldp);
+                                            doctors_string.push_str(&free_rooms);
                                         }
                                     } else if let doctors::ResultType::DocArray(result) = parsed_doc_res.result {
                                         for doctor in result {
-                                            
+                                            doctors_string.push_str(&format!("- {} {} {}: \n", doctor.main_doctor.first_name, doctor.main_doctor.second_name, doctor.main_doctor.last_name));
+                                            let free_rooms = collect_free_rooms_data(doctor);
+                                            doctors_string.push_str(&free_rooms);
                                         }
                                     }
+                                    doctors_string += "\n";
+                                    message_string.push_str(&doctors_string);
                                 },
                                 Err(err) => {
                                     let _ = loop_bot.send_message(ChatId(user.chat_id), format!("Не удалось получить список направлений по причине: `{}`", err.status().unwrap())).await;
