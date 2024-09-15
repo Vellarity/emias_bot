@@ -1,5 +1,6 @@
 use chrono::NaiveDate;
-use helper::collect_free_rooms_data;
+use dotenv::dotenv;
+use std::{env, sync::Arc};
 use teloxide::{prelude::*, utils::command::BotCommands};
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, ConnectOptions, Database, DatabaseConnection, EntityTrait, QueryFilter};
 
@@ -7,12 +8,10 @@ pub mod entities;
 use entities::{info, prelude::*};
 
 pub mod parsable;
-use parsable::{basic::BasicRequest, doctors::{self, DoctorsInfoParamsRequest, DoctorsInfoParamsResponse}, referrals::{ReferralsInfoParamsRequest, ReferralsInfoResponse}};
 
 pub mod helper;
+use helper::get_user_referrals;
 
-use dotenv::dotenv;
-use std::{env, sync::Arc};
 
 pub static DB:tokio::sync::OnceCell<DatabaseConnection> = tokio::sync::OnceCell::const_new();
 
@@ -48,88 +47,26 @@ async fn main() {
                 .await.expect("Не могу прочитать БАЗУ.");
 
             for user in users_to_send {
-                let ref_data = BasicRequest::<ReferralsInfoParamsRequest>::new(
-                    Some("123".to_owned()), 
-                    user.oms_card.unwrap().to_string(), 
-                    user.date_birth.unwrap().to_string()
-                );
+                let message = get_user_referrals(&user).await;
 
-                let ref_res = reqwest::Client::new()
-                    .post("https://emias.info/api/emc/appointment-eip/v1/?getReferralsInfo")
-                    .json(&ref_data)
-                    .send()
-                    .await;
-
-                match ref_res {
-                    Ok(res) => {
-                        //let ref_data = res.json::<ReferralsInfoResponse>().await;
-                        let parsed_ref_res = res.json::<ReferralsInfoResponse>().await.unwrap();
-                        let mut message_string = "Ваши направления: \n".to_string();
-                        for result in parsed_ref_res.result {
-                            let doc_data = BasicRequest::<DoctorsInfoParamsRequest>::new(
-                                Some("123".to_owned()),
-                                user.oms_card.unwrap().to_string(),
-                                user.date_birth.unwrap().to_string(),
-                                result.id
-                            );
-
-                            message_string.push_str(
-                                &format!(
-                                    "[{start} - {end}] {name}\n", 
-                                    start = NaiveDate::parse_from_str(&result.start_time, "%Y-%m-%d").unwrap().format("%d.%m.%Y").to_string(),
-                                    end = NaiveDate::parse_from_str(&result.end_time, "%Y-%m-%d").unwrap().format("%d.%m.%Y").to_string(),
-                                    name = if result.to_doctor.is_some() { result.to_doctor.unwrap().speciality_name  } else { result.to_ldp.unwrap().ldp_type_name },
-                                )
-                            );
-
-                            let doc_res = reqwest::Client::new()
-                                .post("https://emias.info/api/emc/appointment-eip/v1/?getDoctorsInfo")
-                                .json(&doc_data)
-                                .send()
-                                .await;
-
-                            match doc_res {
-                                Ok(dr) => {
-                                    //println!("{:#?}", dr.text().await);
-                                    let parsed_doc_res = dr.json::<DoctorsInfoParamsResponse>().await.unwrap();
-                                    let mut doctors_string = String::new();
-
-                                    if let doctors::ResultType::LdpArray(result) = parsed_doc_res.result {
-                                        for ldp in result {
-                                            doctors_string.push_str(&format!("- {}: \n", ldp.name));
-                                            let free_rooms = collect_free_rooms_data(ldp);
-                                            doctors_string.push_str(&free_rooms);
-                                        }
-                                    } else if let doctors::ResultType::DocArray(result) = parsed_doc_res.result {
-                                        for doctor in result {
-                                            doctors_string.push_str(&format!("- {} {} {}: \n", doctor.main_doctor.first_name, doctor.main_doctor.second_name, doctor.main_doctor.last_name));
-                                            let free_rooms = collect_free_rooms_data(doctor);
-                                            doctors_string.push_str(&free_rooms);
-                                        }
-                                    }
-                                    doctors_string += "\n";
-                                    message_string.push_str(&doctors_string);
-                                },
-                                Err(err) => {
-                                    let _ = loop_bot.send_message(ChatId(user.chat_id), format!("Не удалось получить список направлений по причине: `{}`", err.status().unwrap())).await;
-                                }
-                            }
-
-
-
-                        }
+                match message {
+                    Ok(message) => {
                         let _ = loop_bot.send_message(
                             ChatId(user.chat_id), 
-                            message_string
+                            message
                         ).await;
-                        
                     },
                     Err(err) => {
-                        let _ = loop_bot.send_message(ChatId(user.chat_id), format!("Не удалось получить список направлений по причине: `{}`", err.status().unwrap())).await;
+                        let _ = loop_bot.send_message(
+                            ChatId(user.chat_id), 
+                            format!(
+                                "Не удалось получить список направлений: \n-Ошибка в запросе по ссылке: `{}`; \n-Код ответа: `{}`.", 
+                                err.url().unwrap(), 
+                                err.status().unwrap()
+                            )
+                        ).await;
                     }
                 }
-
-                //let _ = loop_bot.send_message(ChatId(user.chat_id), "Test").await;
             }
         }
     });
