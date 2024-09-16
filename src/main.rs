@@ -1,8 +1,7 @@
-use chrono::NaiveDate;
 use dotenv::dotenv;
-use std::{env, sync::Arc};
-use teloxide::{prelude::*, utils::command::BotCommands};
-use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, ConnectOptions, Database, DatabaseConnection, EntityTrait, QueryFilter};
+use std::{env, fmt::format, sync::Arc};
+use teloxide::{dispatching::dialogue::GetChatId, prelude::*, types::{InlineKeyboardButton, InlineKeyboardMarkup, Me}, utils::command::BotCommands};
+use sea_orm::{ColumnTrait, ConnectOptions, Database, DatabaseConnection, EntityTrait, QueryFilter};
 
 pub mod entities;
 use entities::{info, prelude::*};
@@ -10,7 +9,10 @@ use entities::{info, prelude::*};
 pub mod parsable;
 
 pub mod helper;
-use helper::get_user_referrals;
+use helper::{get_referrals_obj, get_user_referrals};
+
+pub mod em_commands;
+
 
 
 pub static DB:tokio::sync::OnceCell<DatabaseConnection> = tokio::sync::OnceCell::const_new();
@@ -51,10 +53,16 @@ async fn main() {
 
                 match message {
                     Ok(message) => {
+                        let go_to_ref_button = InlineKeyboardButton::new(
+                            "Записаться", 
+                            teloxide::types::InlineKeyboardButtonKind::CallbackData("get_doctors".to_string())
+                        );
+                        let markup = InlineKeyboardMarkup::new([[go_to_ref_button]]);
+
                         let _ = loop_bot.send_message(
                             ChatId(user.chat_id), 
                             message
-                        ).await;
+                        ).reply_markup(markup).await;
                     },
                     Err(err) => {
                         let _ = loop_bot.send_message(
@@ -71,7 +79,15 @@ async fn main() {
         }
     });
 
-    EmCommand::repl(main_bot, answer).await;
+    let handler = dptree::entry()
+        .branch(Update::filter_message().endpoint(message_handler))
+        .branch(Update::filter_callback_query().endpoint(callback_handler));
+        //.branch(Update::filter_inline_query().endpoint(inline_handler));
+
+
+    Dispatcher::builder(main_bot, handler).enable_ctrlc_handler().build().dispatch().await;
+
+    //EmCommand::repl(main_bot, answer).await;
 }
 
 #[derive(BotCommands, Clone)]
@@ -89,7 +105,71 @@ enum EmCommand {
     Info
 }
 
-async fn answer(bot: Bot, msg: Message, cmd: EmCommand) -> ResponseResult<()> {
+async fn callback_handler(bot:Bot, callback: CallbackQuery ) -> ResponseResult<()> {
+    let chat_id = callback.chat_id().unwrap();
+    if let Some(command) = callback.data {
+        let user = Info::find().filter(info::Column::ChatId.eq(callback.from.id.0)).one(DB.get().unwrap()).await.unwrap().unwrap();
+
+        let command_parts = command.split("/").collect::<Vec<&str>>();
+
+        match command_parts[0] {
+            "get_referrals" => {
+                let refs_result = get_referrals_obj(&user).await;
+                match refs_result {
+                    Ok(referrals) => {
+                        let away_key = InlineKeyboardButton::new("Назад", teloxide::types::InlineKeyboardButtonKind::CallbackData("back_to_main".to_string()));
+                        let mut refs_keys = vec![];
+                        
+                        for referral in referrals.result {
+                            let name = if referral.to_doctor.is_some() { referral.to_doctor.unwrap().speciality_name  } else { referral.to_ldp.unwrap().ldp_type_name };
+                            refs_keys.push(
+                                InlineKeyboardButton::new(name, teloxide::types::InlineKeyboardButtonKind::CallbackData(format!("get_doctors/{}", referral.id)))
+                            );
+                        }
+                    },
+                    Err(_) => {
+                        bot.send_message(chat_id, "Не удалось получить список направлений").await.unwrap();
+                    }
+                }
+            },
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+async fn message_handler(bot: Bot, msg: Message, me: Me) -> ResponseResult<()> {
+    if let Some(text) = msg.text() {
+        let cmd = BotCommands::parse(text, me.username()).unwrap();
+
+        match cmd {
+            EmCommand::Help => {
+                em_commands::message::help(bot, msg).await;
+            },
+            EmCommand::Start => {
+                em_commands::message::start(bot, msg).await;
+            },
+            EmCommand::OmsCard(oms) => {
+                em_commands::message::oms_card(bot, msg, oms).await;
+            },
+            EmCommand::DateBirth(date) => {
+                em_commands::message::date_birth(bot, msg, date).await;
+            },
+            EmCommand::Info => {
+                em_commands::message::info(bot, msg).await;
+            }
+        };
+    }
+    
+
+    Ok(())
+}
+
+
+
+
+/* 
     match cmd {
         EmCommand::Help => bot.send_message(msg.chat.id, EmCommand::descriptions().to_string()).await?,
         EmCommand::Start => {
@@ -165,5 +245,5 @@ async fn answer(bot: Bot, msg: Message, cmd: EmCommand) -> ResponseResult<()> {
         }
     };
 
-    Ok(())
-}
+
+*/
