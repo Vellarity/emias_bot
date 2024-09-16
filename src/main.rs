@@ -1,5 +1,6 @@
 use dotenv::dotenv;
-use std::{env, fmt::format, sync::Arc};
+use reqwest::Client;
+use std::{env, error::Error, sync::Arc};
 use teloxide::{dispatching::dialogue::GetChatId, prelude::*, types::{InlineKeyboardButton, InlineKeyboardMarkup, Me}, utils::command::BotCommands};
 use sea_orm::{ColumnTrait, ConnectOptions, Database, DatabaseConnection, EntityTrait, QueryFilter};
 
@@ -18,7 +19,7 @@ pub mod em_commands;
 pub static DB:tokio::sync::OnceCell<DatabaseConnection> = tokio::sync::OnceCell::const_new();
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn Error>> {
     pretty_env_logger::init();
     log::info!("Starting emias_repr bot...");
     println!("Starting emias_repr bot...");
@@ -33,8 +34,14 @@ async fn main() {
     }).await;
 
     let bot = Arc::new(Bot::new(token));
-    let loop_bot = bot.clone();
-    let main_bot = bot.clone();
+    let loop_bot = Arc::clone(&bot);
+
+    let handler = dptree::entry()
+        .branch(Update::filter_message().endpoint(message_handler))
+        .branch(Update::filter_callback_query().endpoint(callback_handler));
+    //.branch(Update::filter_inline_query().endpoint(inline_handler));
+
+    Dispatcher::builder(bot, handler).enable_ctrlc_handler().build().dispatch().await;
 
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60*30));
@@ -79,15 +86,7 @@ async fn main() {
         }
     });
 
-    let handler = dptree::entry()
-        .branch(Update::filter_message().endpoint(message_handler))
-        .branch(Update::filter_callback_query().endpoint(callback_handler));
-        //.branch(Update::filter_inline_query().endpoint(inline_handler));
-
-
-    Dispatcher::builder(main_bot, handler).enable_ctrlc_handler().build().dispatch().await;
-
-    //EmCommand::repl(main_bot, answer).await;
+    Ok(())
 }
 
 #[derive(BotCommands, Clone)]
@@ -105,7 +104,8 @@ enum EmCommand {
     Info
 }
 
-async fn callback_handler(bot:Bot, callback: CallbackQuery ) -> ResponseResult<()> {
+async fn callback_handler(bot: Bot, callback: CallbackQuery ) -> Result<(), Box<dyn Error + Send + Sync>> {
+
     let chat_id = callback.chat_id().unwrap();
     if let Some(command) = callback.data {
         let user = Info::find().filter(info::Column::ChatId.eq(callback.from.id.0)).one(DB.get().unwrap()).await.unwrap().unwrap();
@@ -126,6 +126,12 @@ async fn callback_handler(bot:Bot, callback: CallbackQuery ) -> ResponseResult<(
                                 InlineKeyboardButton::new(name, teloxide::types::InlineKeyboardButtonKind::CallbackData(format!("get_doctors/{}", referral.id)))
                             );
                         }
+
+                        refs_keys.push(away_key);
+
+                        let markup = InlineKeyboardMarkup::new(vec![refs_keys]);
+
+                        //bot.edit_message_reply_markup(chat_id, callback.message.unwrap().id()).reply_markup(markup).await.unwrap();
                     },
                     Err(_) => {
                         bot.send_message(chat_id, "Не удалось получить список направлений").await.unwrap();
@@ -135,11 +141,12 @@ async fn callback_handler(bot:Bot, callback: CallbackQuery ) -> ResponseResult<(
             _ => {}
         }
     }
+    
 
     Ok(())
 }
 
-async fn message_handler(bot: Bot, msg: Message, me: Me) -> ResponseResult<()> {
+async fn message_handler(bot: Bot, msg: Message, me: Me) -> Result<(), Box<dyn Error + Send + Sync>> {
     if let Some(text) = msg.text() {
         let cmd = BotCommands::parse(text, me.username()).unwrap();
 
