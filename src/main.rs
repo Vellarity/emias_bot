@@ -1,5 +1,4 @@
 use dotenv::dotenv;
-use reqwest::Client;
 use std::{env, error::Error, sync::Arc};
 use teloxide::{dispatching::dialogue::GetChatId, prelude::*, types::{InlineKeyboardButton, InlineKeyboardMarkup, Me}, utils::command::BotCommands};
 use sea_orm::{ColumnTrait, ConnectOptions, Database, DatabaseConnection, EntityTrait, QueryFilter};
@@ -14,15 +13,12 @@ use helper::{get_referrals_obj, get_user_referrals};
 
 pub mod em_commands;
 
-
-
 pub static DB:tokio::sync::OnceCell<DatabaseConnection> = tokio::sync::OnceCell::const_new();
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     pretty_env_logger::init();
     log::info!("Starting emias_repr bot...");
-    println!("Starting emias_repr bot...");
 
     dotenv().ok();
     let token = env::var("TOKEN").expect("Doesn't provide `.env` file or `TOKEN` value");
@@ -33,15 +29,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Database::connect(opt).await.unwrap()
     }).await;
 
-    let bot = Arc::new(Bot::new(token));
-    let loop_bot = Arc::clone(&bot);
-
-    let handler = dptree::entry()
-        .branch(Update::filter_message().endpoint(message_handler))
-        .branch(Update::filter_callback_query().endpoint(callback_handler));
-    //.branch(Update::filter_inline_query().endpoint(inline_handler));
-
-    Dispatcher::builder(bot, handler).enable_ctrlc_handler().build().dispatch().await;
+    let bot = Bot::new(token);
+    let loop_bot = bot.clone();
 
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60*30));
@@ -62,7 +51,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     Ok(message) => {
                         let go_to_ref_button = InlineKeyboardButton::new(
                             "Записаться", 
-                            teloxide::types::InlineKeyboardButtonKind::CallbackData("get_doctors".to_string())
+                            teloxide::types::InlineKeyboardButtonKind::CallbackData("get_referrals".to_string())
                         );
                         let markup = InlineKeyboardMarkup::new([[go_to_ref_button]]);
 
@@ -85,6 +74,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     });
+
+    let handler = dptree::entry()
+        .branch(Update::filter_message().endpoint(message_handler))
+        .branch(Update::filter_callback_query().endpoint(callback_handler));
+//.branch(Update::filter_inline_query().endpoint(inline_handler));
+
+    Dispatcher::builder(bot.clone(), handler).enable_ctrlc_handler().build().dispatch().await;
 
     Ok(())
 }
@@ -123,20 +119,23 @@ async fn callback_handler(bot: Bot, callback: CallbackQuery ) -> Result<(), Box<
                         for referral in referrals.result {
                             let name = if referral.to_doctor.is_some() { referral.to_doctor.unwrap().speciality_name  } else { referral.to_ldp.unwrap().ldp_type_name };
                             refs_keys.push(
-                                InlineKeyboardButton::new(name, teloxide::types::InlineKeyboardButtonKind::CallbackData(format!("get_doctors/{}", referral.id)))
+                                [InlineKeyboardButton::new(name, teloxide::types::InlineKeyboardButtonKind::CallbackData(format!("get_doctors/{}", referral.id)))]
                             );
                         }
 
-                        refs_keys.push(away_key);
+                        refs_keys.push([away_key]);
 
-                        let markup = InlineKeyboardMarkup::new(vec![refs_keys]);
+                        let markup = InlineKeyboardMarkup::new(refs_keys);
 
-                        //bot.edit_message_reply_markup(chat_id, callback.message.unwrap().id()).reply_markup(markup).await.unwrap();
+                        bot.edit_message_reply_markup(chat_id, callback.message.unwrap().id()).reply_markup(markup).await.unwrap();
                     },
                     Err(_) => {
                         bot.send_message(chat_id, "Не удалось получить список направлений").await.unwrap();
                     }
                 }
+            },
+            "back_to_main" => {
+
             },
             _ => {}
         }
