@@ -3,6 +3,9 @@ name = "em_bot"
 version = "0.1.0"
 edition = "2021"
 
+[profile.dev]
+opt-level = 1 
+
 [dependencies]
 chrono = "0.4.38"
 dotenv = "0.15.0"
